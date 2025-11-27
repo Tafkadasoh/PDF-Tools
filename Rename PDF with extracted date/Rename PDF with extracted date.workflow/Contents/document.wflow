@@ -1,0 +1,341 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>AMApplicationBuild</key>
+	<string>528</string>
+	<key>AMApplicationVersion</key>
+	<string>2.10</string>
+	<key>AMDocumentVersion</key>
+	<string>2</string>
+	<key>actions</key>
+	<array>
+		<dict>
+			<key>action</key>
+			<dict>
+				<key>AMAccepts</key>
+				<dict>
+					<key>Container</key>
+					<string>List</string>
+					<key>Optional</key>
+					<true/>
+					<key>Types</key>
+					<array>
+						<string>com.apple.cocoa.string</string>
+					</array>
+				</dict>
+				<key>AMActionVersion</key>
+				<string>2.0.3</string>
+				<key>AMApplication</key>
+				<array>
+					<string>Automator</string>
+				</array>
+				<key>AMParameterProperties</key>
+				<dict>
+					<key>COMMAND_STRING</key>
+					<dict/>
+					<key>CheckedForUserDefaultShell</key>
+					<dict/>
+					<key>inputMethod</key>
+					<dict/>
+					<key>shell</key>
+					<dict/>
+					<key>source</key>
+					<dict/>
+				</dict>
+				<key>AMProvides</key>
+				<dict>
+					<key>Container</key>
+					<string>List</string>
+					<key>Types</key>
+					<array>
+						<string>com.apple.cocoa.string</string>
+					</array>
+				</dict>
+				<key>ActionBundlePath</key>
+				<string>/System/Library/Automator/Run Shell Script.action</string>
+				<key>ActionName</key>
+				<string>Run Shell Script</string>
+				<key>ActionParameters</key>
+				<dict>
+					<key>COMMAND_STRING</key>
+					<string>#!/usr/bin/env zsh
+# Activate for Automator only
+export PATH="/opt/homebrew/bin:$PATH"
+
+set -o nounset
+set -o pipefail
+
+typeset -A months
+months=(
+  januar 01 februar 02 märz 03 maerz 03
+  april 04 mai 05 juni 06
+  juli 07 august 08 september 09
+  oktober 10 november 11 dezember 12
+)
+
+normalize_date() {
+  local t="$1"
+  local y m d monthname
+
+  # dd.mm.yyyy
+  if [[ "$t" =~ (^|[^0-9])([0-3]?[0-9])\.([0-1]?[0-9])\.([1-2][0-9]{3})([^0-9]|$) ]]; then
+    d="${match[2]}" m="${match[3]}" y="${match[4]}"
+    if (( 1 &lt;= 10#$m &amp;&amp; 10#$m &lt;= 12 &amp;&amp; 1 &lt;= 10#$d &amp;&amp; 10#$d &lt;= 31 )); then
+      printf "%04d-%02d-%02d\n" "$y" "$m" "$d"
+      return 0
+    fi
+  fi
+
+  # yyyy-mm-dd
+  if [[ "$t" =~ (^|[^0-9])([1-2][0-9]{3})-([0-1][0-9])-([0-3][0-9])([^0-9]|$) ]]; then
+    y="${match[2]}" m="${match[3]}" d="${match[4]}"
+    if (( 1 &lt;= 10#$m &amp;&amp; 10#$m &lt;= 12 &amp;&amp; 1 &lt;= 10#$d &amp;&amp; 10#$d &lt;= 31 )); then
+      printf "%s-%s-%s\n" "$y" "$m" "$d"
+      return 0
+    fi
+  fi
+  # "4. September 2024"
+  if [[ "$t" =~ (^|[^0-9])([0-3]?[0-9])\.[[:space:]]*([A-Za-zÄÖÜäöü]+)[[:space:]]+([1-2][0-9]{3})([^0-9]|$) ]]; then
+    d="${match[2]}" monthname="${match[3]:l}" y="${match[4]}"
+    m=""
+    if [[ -n "${months[$monthname]-}" ]]; then
+      m="${months[$monthname]}"
+    else
+      for key in ${(k)months}; do
+        if [[ "$monthname" == *"$key"* || "$key" == *"$monthname"* ]]; then
+          m="${months[$key]}"
+          break
+        fi
+      done
+    fi
+    if [[ -n "$m" &amp;&amp; 1 -le 10#$d &amp;&amp; 10#$d -le 31 ]]; then
+      printf "%04d-%02d-%02d\n" "$y" "$m" "$d"
+      return 0
+    fi
+  fi
+  # --- (month + year only), e.g. "April 2025" ---
+  if [[ "$t" =~ (^|[^0-9])([A-Za-zÄÖÜäöü]+)[[:space:]]+([1-2][0-9]{3})([^0-9]|$) ]]; then
+    monthname="${match[2]:l}" y="${match[3]}"
+    m=""
+    if [[ -n "${months[$monthname]-}" ]]; then
+      m="${months[$monthname]}"
+    else
+      for key in ${(k)months}; do
+        if [[ "$monthname" == *"$key"* || "$key" == *"$monthname"* ]]; then
+          m="${months[$key]}"
+          break
+        fi
+      done
+    fi
+    if [[ -n "$m" ]]; then
+      printf "%04d-%02d\n" "$y" "$m"
+      return 0
+    fi
+  fi
+  return 1
+}
+
+
+# --- Main loop over all arguments ---
+if [[ $# -lt 1 ]]; then
+  echo "Usage: $0 &lt;pdf-file&gt; [&lt;pdf-file&gt; ...]" &gt;&amp;2
+  exit 1
+fi
+
+if ! command -v pdftotext &gt;/dev/null; then
+  echo "pdftotext not found in PATH: $PATH" &gt;&amp;2
+fi
+
+for pdf in "$@"; do
+  if [[ ! -f "$pdf" ]]; then
+    echo "File not found: $pdf" &gt;&amp;2
+    continue
+  fi
+
+  text="$(pdftotext "$pdf" - 2&gt;/dev/null)"
+  text="${text//$'\n'/ }"
+  text="${text//-\ /}"
+
+  date="$(normalize_date "$text" || true)"
+
+  if [[ -n "$date" ]]; then
+    dir=$(dirname "$pdf")
+    base=$(basename "$pdf" .pdf)
+    ext="${pdf##*.}"
+    newname="${dir}/${date} - ${base}.${ext}"
+    mv -- "$pdf" "$newname"
+    echo "Renamed to $newname"
+  else
+    echo "No valid date found in $pdf"
+  fi
+done
+</string>
+					<key>CheckedForUserDefaultShell</key>
+					<true/>
+					<key>inputMethod</key>
+					<integer>1</integer>
+					<key>shell</key>
+					<string>/bin/zsh</string>
+					<key>source</key>
+					<string></string>
+				</dict>
+				<key>BundleIdentifier</key>
+				<string>com.apple.RunShellScript</string>
+				<key>CFBundleVersion</key>
+				<string>2.0.3</string>
+				<key>CanShowSelectedItemsWhenRun</key>
+				<false/>
+				<key>CanShowWhenRun</key>
+				<true/>
+				<key>Category</key>
+				<array>
+					<string>AMCategoryUtilities</string>
+				</array>
+				<key>Class Name</key>
+				<string>RunShellScriptAction</string>
+				<key>InputUUID</key>
+				<string>AFF0A0FB-AE6E-47B7-9F5A-945DC6F628AE</string>
+				<key>Keywords</key>
+				<array>
+					<string>Shell</string>
+					<string>Script</string>
+					<string>Command</string>
+					<string>Run</string>
+					<string>Unix</string>
+				</array>
+				<key>OutputUUID</key>
+				<string>09F96E39-10BC-43EC-82B8-5D8DA2653CB7</string>
+				<key>UUID</key>
+				<string>D7E1A9B4-1DAF-45CB-AC27-5E475FB4AF76</string>
+				<key>UnlocalizedApplications</key>
+				<array>
+					<string>Automator</string>
+				</array>
+				<key>arguments</key>
+				<dict>
+					<key>0</key>
+					<dict>
+						<key>default value</key>
+						<integer>0</integer>
+						<key>name</key>
+						<string>inputMethod</string>
+						<key>required</key>
+						<string>0</string>
+						<key>type</key>
+						<string>0</string>
+						<key>uuid</key>
+						<string>0</string>
+					</dict>
+					<key>1</key>
+					<dict>
+						<key>default value</key>
+						<false/>
+						<key>name</key>
+						<string>CheckedForUserDefaultShell</string>
+						<key>required</key>
+						<string>0</string>
+						<key>type</key>
+						<string>0</string>
+						<key>uuid</key>
+						<string>1</string>
+					</dict>
+					<key>2</key>
+					<dict>
+						<key>default value</key>
+						<string></string>
+						<key>name</key>
+						<string>source</string>
+						<key>required</key>
+						<string>0</string>
+						<key>type</key>
+						<string>0</string>
+						<key>uuid</key>
+						<string>2</string>
+					</dict>
+					<key>3</key>
+					<dict>
+						<key>default value</key>
+						<string></string>
+						<key>name</key>
+						<string>COMMAND_STRING</string>
+						<key>required</key>
+						<string>0</string>
+						<key>type</key>
+						<string>0</string>
+						<key>uuid</key>
+						<string>3</string>
+					</dict>
+					<key>4</key>
+					<dict>
+						<key>default value</key>
+						<string>/bin/sh</string>
+						<key>name</key>
+						<string>shell</string>
+						<key>required</key>
+						<string>0</string>
+						<key>type</key>
+						<string>0</string>
+						<key>uuid</key>
+						<string>4</string>
+					</dict>
+				</dict>
+				<key>conversionLabel</key>
+				<integer>0</integer>
+				<key>isViewVisible</key>
+				<integer>1</integer>
+				<key>location</key>
+				<string>544.000000:361.000000</string>
+				<key>nibPath</key>
+				<string>/System/Library/Automator/Run Shell Script.action/Contents/Resources/Base.lproj/main.nib</string>
+			</dict>
+			<key>isViewVisible</key>
+			<integer>1</integer>
+		</dict>
+	</array>
+	<key>connectors</key>
+	<dict/>
+	<key>workflowMetaData</key>
+	<dict>
+		<key>applicationBundleID</key>
+		<string>com.apple.finder</string>
+		<key>applicationBundleIDsByPath</key>
+		<dict>
+			<key>/System/Library/CoreServices/Finder.app</key>
+			<string>com.apple.finder</string>
+		</dict>
+		<key>applicationPath</key>
+		<string>/System/Library/CoreServices/Finder.app</string>
+		<key>applicationPaths</key>
+		<array>
+			<string>/System/Library/CoreServices/Finder.app</string>
+		</array>
+		<key>backgroundColorName</key>
+		<string>blackColor</string>
+		<key>inputTypeIdentifier</key>
+		<string>com.apple.Automator.fileSystemObject</string>
+		<key>outputTypeIdentifier</key>
+		<string>com.apple.Automator.nothing</string>
+		<key>presentationMode</key>
+		<integer>15</integer>
+		<key>processesInput</key>
+		<false/>
+		<key>serviceApplicationBundleID</key>
+		<string>com.apple.finder</string>
+		<key>serviceApplicationPath</key>
+		<string>/System/Library/CoreServices/Finder.app</string>
+		<key>serviceInputTypeIdentifier</key>
+		<string>com.apple.Automator.fileSystemObject</string>
+		<key>serviceOutputTypeIdentifier</key>
+		<string>com.apple.Automator.nothing</string>
+		<key>serviceProcessesInput</key>
+		<false/>
+		<key>systemImageName</key>
+		<string>NSActionTemplate</string>
+		<key>useAutomaticInputType</key>
+		<false/>
+		<key>workflowTypeIdentifier</key>
+		<string>com.apple.Automator.servicesMenu</string>
+	</dict>
+</dict>
+</plist>
