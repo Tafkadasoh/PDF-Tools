@@ -1,6 +1,5 @@
 #!/usr/bin/env zsh
-# Activate for Automator only
-# export PATH="/opt/homebrew/bin:$PATH"
+export PATH="/opt/homebrew/bin:$PATH"
 
 set -o nounset
 set -o pipefail
@@ -13,29 +12,33 @@ months=(
   oktober 10 november 11 dezember 12
 )
 
+# --- Optionen ---
+verbose=false
+if [[ "$1" == "-v" ]]; then
+  verbose=true
+  shift
+fi
+
 normalize_date() {
   local t="$1"
   local y m d monthname
 
   # dd.mm.yyyy
-  if [[ "$t" =~ (^|[^0-9])([0-3]?[0-9])\.([0-1]?[0-9])\.([1-2][0-9]{3})([^0-9]|$) ]]; then
+  if [[ "$t" =~ (^|[[:space:][:punct:]])([0-3]?[0-9])\.([0-1]?[0-9])\.((1[0-9]{3}|2[0-9]{3}))([[:space:][:punct:]]|$) ]]; then
     d="${match[2]}" m="${match[3]}" y="${match[4]}"
-    if (( 1 <= 10#$m && 10#$m <= 12 && 1 <= 10#$d && 10#$d <= 31 )); then
-      printf "%04d-%02d-%02d\n" "$y" "$m" "$d"
-      return 0
-    fi
+    printf "%04d-%02d-%02d\n" "$y" "$m" "$d"
+    return 0
   fi
 
   # yyyy-mm-dd
-  if [[ "$t" =~ (^|[^0-9])([1-2][0-9]{3})-([0-1][0-9])-([0-3][0-9])([^0-9]|$) ]]; then
+  if [[ "$t" =~ (^|[[:space:][:punct:]])((1[0-9]{3}|2[0-9]{3}))-([0-1][0-9])-([0-3][0-9])([[:space:][:punct:]]|$) ]]; then
     y="${match[2]}" m="${match[3]}" d="${match[4]}"
-    if (( 1 <= 10#$m && 10#$m <= 12 && 1 <= 10#$d && 10#$d <= 31 )); then
-      printf "%s-%s-%s\n" "$y" "$m" "$d"
-      return 0
-    fi
+    printf "%s-%s-%s\n" "$y" "$m" "$d"
+    return 0
   fi
+
   # "4. September 2024"
-  if [[ "$t" =~ (^|[^0-9])([0-3]?[0-9])\.[[:space:]]*([A-Za-zÄÖÜäöü]+)[[:space:]]+([1-2][0-9]{3})([^0-9]|$) ]]; then
+  if [[ "$t" =~ (^|[[:space:][:punct:]])([0-3]?[0-9])\.[[:space:]]*([A-Za-zÄÖÜäöü]+)[[:space:]]+((1[0-9]{3}|2[0-9]{3}))([[:space:][:punct:]]|$) ]]; then
     d="${match[2]}" monthname="${match[3]:l}" y="${match[4]}"
     m=""
     if [[ -n "${months[$monthname]-}" ]]; then
@@ -48,13 +51,11 @@ normalize_date() {
         fi
       done
     fi
-    if [[ -n "$m" && 1 -le 10#$d && 10#$d -le 31 ]]; then
-      printf "%04d-%02d-%02d\n" "$y" "$m" "$d"
-      return 0
-    fi
+    [[ -n "$m" ]] && printf "%04d-%02d-%02d\n" "$y" "$m" "$d" && return 0
   fi
-  # --- (month + year only), e.g. "April 2025" ---
-  if [[ "$t" =~ (^|[^0-9])([A-Za-zÄÖÜäöü]+)[[:space:]]+([1-2][0-9]{3})([^0-9]|$) ]]; then
+
+  # month + year only
+  if [[ "$t" =~ (^|[[:space:][:punct:]])([A-Za-zÄÖÜäöü]+)[[:space:]]+((1[0-9]{3}|2[0-9]{3}))([[:space:][:punct:]]|$) ]]; then
     monthname="${match[2]:l}" y="${match[3]}"
     m=""
     if [[ -n "${months[$monthname]-}" ]]; then
@@ -67,44 +68,93 @@ normalize_date() {
         fi
       done
     fi
-    if [[ -n "$m" ]]; then
-      printf "%04d-%02d\n" "$y" "$m"
-      return 0
-    fi
+    [[ -n "$m" ]] && printf "%04d-%02d\n" "$y" "$m" && return 0
   fi
   return 1
 }
 
+closest_date() {
+  local -a arr=("$@")
+  local today=$(date +%s)
+  local best="" bestdiff=999999999
 
-# --- Main loop over all arguments ---
-if [[ $# -lt 1 ]]; then
-  echo "Usage: $0 <pdf-file> [<pdf-file> ...]" >&2
-  exit 1
-fi
+  for d in $arr; do
+    local ts=""
+    local display="$d"
 
-if ! command -v pdftotext >/dev/null; then
-  echo "pdftotext not found in PATH: $PATH" >&2
-fi
+    if [[ "$d" =~ ^[12][0-9]{3}-[0-9]{2}-[0-9]{2}$ ]]; then
+      ts=$(date -j -f "%Y-%m-%d" "$d" +%s 2>/dev/null || echo "")
+    elif [[ "$d" =~ ^[12][0-9]{3}-[0-9]{2}$ ]]; then
+      ts=$(date -j -f "%Y-%m-%d" "${d}-01" +%s 2>/dev/null || echo "")
+      display="$d"   # nur YYYY-MM für spätere Ausgabe
+    fi
 
-for pdf in "$@"; do
-  if [[ ! -f "$pdf" ]]; then
-    echo "File not found: $pdf" >&2
-    continue
+    if [[ -n "$ts" ]]; then
+      local diff=$(( ts > today ? ts - today : today - ts ))
+      if (( diff < bestdiff )); then
+        best="$display"
+        bestdiff=$diff
+      fi
+    fi
+  done
+
+  echo "$best"
+}
+
+debug_dates() {
+  local -a arr=("$@")
+  if $verbose; then
+    echo ">>> Gefundene Daten:"
+    for d in $arr; do
+      echo "   $d"
+    done
   fi
+}
+
+# --- Main loop ---
+for pdf in "$@"; do
+  [[ ! -f "$pdf" ]] && echo "File not found: $pdf" >&2 && continue
 
   text="$(pdftotext "$pdf" - 2>/dev/null)"
   text="${text//$'\n'/ }"
   text="${text//-\ /}"
 
-  date="$(normalize_date "$text" || true)"
+  dates=()
+  tokens=(${(z)text})
 
-  if [[ -n "$date" ]]; then
-    dir=$(dirname "$pdf")
-    base=$(basename "$pdf" .pdf)
-    ext="${pdf##*.}"
-    newname="${dir}/${date} - ${base}.${ext}"
-    mv -- "$pdf" "$newname"
-    echo "Renamed to $newname"
+  for i in {1..${#tokens}}; do
+    # Einzelnes Token
+    if d=$(normalize_date "${tokens[i]}"); then
+      dates+=$d
+    fi
+    # Kombination aus zwei Tokens
+    if (( i < ${#tokens} )); then
+      if d=$(normalize_date "${tokens[i]} ${tokens[i+1]}"); then
+        dates+=$d
+      fi
+    fi
+    # Kombination aus drei Tokens
+    if (( i < ${#tokens}-1 )); then
+      if d=$(normalize_date "${tokens[i]} ${tokens[i+1]} ${tokens[i+2]}"); then
+        dates+=$d
+      fi
+    fi
+  done
+
+  debug_dates "${dates[@]}"
+
+  if [[ ${#dates[@]} -gt 0 ]]; then
+    date=$(closest_date $dates)
+    if [[ -n "$date" ]]; then
+      dir=$(dirname "$pdf")
+      base=$(basename "$pdf" .pdf)
+      ext="${pdf##*.}"
+      newname="${dir}/${date} - ${base}.${ext}"
+      mv -- "$pdf" "$newname"
+      echo "Renamed to $newname"
+    else
+      echo "No valid date found in $pdf"
+    fi
   else
     echo "No valid date found in $pdf"
   fi
