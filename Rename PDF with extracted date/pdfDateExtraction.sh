@@ -1,4 +1,6 @@
 #!/usr/bin/env zsh
+# Activate for Automator only
+# export PATH="/opt/homebrew/bin:$PATH"
 
 set -o nounset
 set -o pipefail
@@ -10,23 +12,6 @@ months=(
   juli 07 august 08 september 09
   oktober 10 november 11 dezember 12
 )
-
-if [[ $# -ne 1 ]]; then
-  echo "Usage: $0 <pdf-file>" >&2
-  exit 1
-fi
-
-pdf="$1"
-if [[ ! -f "$pdf" ]]; then
-  echo "File not found: $pdf" >&2
-  exit 1
-fi
-
-# --- Text extrahieren und normalisieren ---
-text="$(pdftotext "$pdf" - 2>/dev/null)"
-# Zeilenumbrüche und Bindestriche glätten
-text="${text//$'\n'/ }"
-text="${text//-\ /}"   # trennt „Sep-\ntember“ wieder zusammen
 
 normalize_date() {
   local t="$1"
@@ -49,17 +34,13 @@ normalize_date() {
       return 0
     fi
   fi
-
   # "4. September 2024"
   if [[ "$t" =~ (^|[^0-9])([0-3]?[0-9])\.[[:space:]]*([A-Za-zÄÖÜäöü]+)[[:space:]]+([1-2][0-9]{3})([^0-9]|$) ]]; then
     d="${match[2]}" monthname="${match[3]:l}" y="${match[4]}"
     m=""
-
-    # Exakter Treffer?
     if [[ -n "${months[$monthname]-}" ]]; then
       m="${months[$monthname]}"
     else
-      # Fuzzy‑Fallback: Teilstring‑Suche
       for key in ${(k)months}; do
         if [[ "$monthname" == *"$key"* || "$key" == *"$monthname"* ]]; then
           m="${months[$key]}"
@@ -67,24 +48,64 @@ normalize_date() {
         fi
       done
     fi
-
     if [[ -n "$m" && 1 -le 10#$d && 10#$d -le 31 ]]; then
       printf "%04d-%02d-%02d\n" "$y" "$m" "$d"
       return 0
     fi
   fi
-
+  # --- (month + year only), e.g. "April 2025" ---
+  if [[ "$t" =~ (^|[^0-9])([A-Za-zÄÖÜäöü]+)[[:space:]]+([1-2][0-9]{3})([^0-9]|$) ]]; then
+    monthname="${match[2]:l}" y="${match[3]}"
+    m=""
+    if [[ -n "${months[$monthname]-}" ]]; then
+      m="${months[$monthname]}"
+    else
+      for key in ${(k)months}; do
+        if [[ "$monthname" == *"$key"* || "$key" == *"$monthname"* ]]; then
+          m="${months[$key]}"
+          break
+        fi
+      done
+    fi
+    if [[ -n "$m" ]]; then
+      printf "%04d-%02d\n" "$y" "$m"
+      return 0
+    fi
+  fi
   return 1
 }
 
-date="$(normalize_date "$text" || true)"
 
-if [[ -n "$date" ]]; then
-  base="${pdf%.*}"
-  ext="${pdf##*.}"
-  newname="${date} - ${base}.${ext}"
-  mv -- "$pdf" "$newname"
-  echo "Renamed to $newname"
-else
-  echo "No valid date found"
+# --- Main loop over all arguments ---
+if [[ $# -lt 1 ]]; then
+  echo "Usage: $0 <pdf-file> [<pdf-file> ...]" >&2
+  exit 1
 fi
+
+if ! command -v pdftotext >/dev/null; then
+  echo "pdftotext not found in PATH: $PATH" >&2
+fi
+
+for pdf in "$@"; do
+  if [[ ! -f "$pdf" ]]; then
+    echo "File not found: $pdf" >&2
+    continue
+  fi
+
+  text="$(pdftotext "$pdf" - 2>/dev/null)"
+  text="${text//$'\n'/ }"
+  text="${text//-\ /}"
+
+  date="$(normalize_date "$text" || true)"
+
+  if [[ -n "$date" ]]; then
+    dir=$(dirname "$pdf")
+    base=$(basename "$pdf" .pdf)
+    ext="${pdf##*.}"
+    newname="${dir}/${date} - ${base}.${ext}"
+    mv -- "$pdf" "$newname"
+    echo "Renamed to $newname"
+  else
+    echo "No valid date found in $pdf"
+  fi
+done
